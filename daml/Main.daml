@@ -2,7 +2,13 @@ module Main where
 
 import DA.Map as Map
 
+{-
+    We define Product and ShoppingCart data records to structure the data for the
+    ShoppingCartService
 
+    The Metrics class allows us to conveniently define metrics on the ShoppingCart record
+    Here we define a function to get the total value of the shopping cart
+-}
 data Product = Product with
     name: Text
     quantity: Int
@@ -24,7 +30,9 @@ instance Metrics ShoppingCart Decimal where
         in
             fromNumeric total
 
-
+{-
+    Shopping cart service is used by the customer to interact with the shopping cart
+-}
 template ShoppingCartService
     with
         customer: Party
@@ -37,6 +45,7 @@ template ShoppingCartService
         key (customer, cart): (Party, ShoppingCart)
         maintainer key._1
 
+        -- | Get the total value of all items in the shopping cart
         nonconsuming choice GetShoppingCartValue: Decimal
             controller cashier
             do 
@@ -44,6 +53,7 @@ template ShoppingCartService
                     cartTotal: Decimal = getCartTotal cart
                 trace(show customer <> " cart total: " <> show cartTotal)(return cartTotal)
         
+        -- | Add a product to the shopping cart
         choice AddProduct: ContractId ShoppingCartService
             with
                 product: Product
@@ -66,6 +76,7 @@ template ShoppingCartService
                 trace(show customer <> " cart: " <> show newCart)(create this with
                     cart = newCart)
         
+        -- | Remove a given product from the shopping cart
         choice RemoveProduct: ContractId ShoppingCartService
             with
                 product: Product
@@ -77,16 +88,18 @@ template ShoppingCartService
                 trace(show customer <> " cart: " <> show newCart)(create this with
                     cart = newCart)
         
-        choice EmptyCart: ContractId ShoppingCartService
-            with
-                product: Product
+        -- | Empties all items in the shopping cart
+        nonconsuming choice EmptyCart: ContractId ShoppingCartService
+            observer customer
             controller cashier
             do
                 archive self 
                 trace("Emptied the shopping cart")(create this with
                     cart = (ShoppingCart with items = Map.empty))
 
-
+{-
+    Checkout service is used by the cashier to facilitate the customer checkout process
+-}
 template CheckoutService
     with
         cashier: Party
@@ -98,6 +111,11 @@ template CheckoutService
 
         ensure customerBalance >= 0.0
 
+        {-
+            Cashier can checkout a customer by providing a shopping cart cid
+            Customer balance is validated
+            Shopping cart is emptied and customer balance is updated accordingly
+        -}
         choice Checkout: ContractId CheckoutService
             with 
                 shoppingCartServiceCid: ContractId ShoppingCartService
@@ -109,12 +127,14 @@ template CheckoutService
                     shoppingCart = shoppingCartService.cart
                     cartTotal: Decimal = getCartTotal shoppingCart
                     newBalance = customerBalance - cartTotal
-                --archive shoppingCartServiceCid
-                --exercise shoppingCartServiceCid EmptyCart
+                exercise shoppingCartServiceCid EmptyCart
                 assertMsg ("Total balance cannot exceed customer balance")(newBalance >= 0.0)
                 trace ("Remaining customer balance: " <> show newBalance)(create this with 
                     customerBalance = newBalance)
         
+        {-
+            Customer can add balance to their account
+        -}
         choice AddCustomerBalance: ContractId CheckoutService
             with
                 additionalBalance: Decimal
