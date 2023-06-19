@@ -1,0 +1,122 @@
+module Test where
+
+import Main
+import Setup
+import Daml.Script
+import DA.List
+
+
+{-
+
+    Min 1 Full Scenario & Min 3 Happy Paths
+        Note: All 4 "Happy Path" test together cover the criteria for a 1 Full Scenario test
+        + testAddProducts: Customer can add various products to the shopping cart
+        + testRemoveProduct: Customer can remove a given product from the shopping cart if it exists
+        + testAddCustomerBalance: Customer can add balance to their account
+        + testCheckout: Cashier can lookup the shopping cart of the customer and check them out
+
+    Min 3 Unhappy Paths
+        - productCannotHaveZeroValue: Products with no value cannot be added to the shopping cart
+        - productCannotHaveZeroQuantity: Products with no quantity cannot be added to the shopping cart
+        - cantCheckoutWithoutMoney: Cashier cannot checkout a customer that doesn't have sufficient funds for the order
+-}
+
+-- + testAddProducts: Customer can add various products to the shopping cart
+testAddProducts = script do
+    (testParties@TestParties{..}, testProducts@TestProducts{..}, shoppingCartServiceId, checkoutServiceId) <- setupShoppingCartAndMarket
+    
+    shoppingCartServiceId <- submit customer do
+        exerciseCmd shoppingCartServiceId AddProduct with 
+            product = milk
+    
+    shoppingCartServiceId <- submit customer do
+        exerciseCmd shoppingCartServiceId AddProduct with 
+            product = bread
+    
+    shoppingCartServiceId <- submit customer do
+        exerciseCmd shoppingCartServiceId AddProduct with 
+            product = bread
+
+    shoppingCartServiceId <- submit customer do
+        exerciseCmd shoppingCartServiceId AddProduct with 
+            product = eggs
+    
+    return (testParties, testProducts, shoppingCartServiceId, checkoutServiceId)
+
+-- + testRemoveProduct: Customer can remove a given product from the shopping cart if it exists
+testRemoveProduct = script do
+    (testParties@TestParties{..}, testProducts@TestProducts{..}, shoppingCartServiceId, checkoutServiceId) <- testAddProducts
+    
+    shoppingCartServiceId <- submit customer do
+        exerciseCmd shoppingCartServiceId RemoveProduct with 
+            product = eggs
+    
+    return (testParties, testProducts, shoppingCartServiceId, checkoutServiceId)
+
+-- + testAddCustomerBalance: Customer can add balance to their account
+testAddCustomerBalance = script do
+    (testParties@TestParties{..}, testProducts@TestProducts{..}, shoppingCartServiceId, checkoutServiceId) <- testRemoveProduct
+    
+    checkoutServiceId <- submit customer do
+        exerciseCmd checkoutServiceId AddCustomerBalance with
+            additionalBalance = 100.00
+    
+    return (testParties, testProducts, shoppingCartServiceId, checkoutServiceId)
+
+-- + testCheckout: Cashier can lookup the shopping cart of the customer and check them out
+testCheckout = script do
+    (testParties@TestParties{..}, testProducts@TestProducts{..}, shoppingCartServiceId, checkoutServiceId) <- testAddCustomerBalance
+    
+    contractAndShoppingCart <- query @ShoppingCartService customer
+    let shoppingCartServiceCid = (head (map (\x -> (x._1) ) contractAndShoppingCart))
+
+    checkoutServiceId <- submit cashier do
+        exerciseCmd checkoutServiceId Checkout with
+            shoppingCartServiceCid
+    
+    return (testParties, testProducts, shoppingCartServiceId, checkoutServiceId)
+
+-- - productCannotHaveZeroValue: Products with no value cannot be added to the shopping cart
+productCannotHaveZeroValue = script do
+    (testParties@TestParties{..}, testProducts@TestProducts{..}, shoppingCartServiceId, checkoutServiceId) <- testAddProducts
+
+    let
+        badBread = Product with
+            name="BadBread"
+            quantity=1
+            price=0.0
+
+    shoppingCartServiceId <- submitMustFail customer do
+        exerciseCmd shoppingCartServiceId AddProduct with 
+            product = badBread
+
+    return ()
+
+-- - productCannotHaveZeroQuantity: Products with no quantity cannot be added to the shopping cart
+productCannotHaveZeroQuantity = script do
+    (testParties@TestParties{..}, testProducts@TestProducts{..}, shoppingCartServiceId, checkoutServiceId) <- testAddProducts
+
+    let
+        badMilk = Product with
+            name="BadMilk"
+            quantity=0
+            price=9.9
+
+    shoppingCartServiceId <- submitMustFail customer do
+        exerciseCmd shoppingCartServiceId AddProduct with 
+            product = badMilk
+
+    return ()
+
+-- - cantCheckoutWithoutMoney: Cashier cannot checkout a customer that doesn't have sufficient funds for the order
+cantCheckoutWithoutMoney = script do
+    (testParties@TestParties{..}, testProducts@TestProducts{..}, shoppingCartServiceId, checkoutServiceId) <- testRemoveProduct
+    
+    contractAndShoppingCart <- query @ShoppingCartService customer
+    let shoppingCartServiceCid = (head (map (\x -> (x._1) ) contractAndShoppingCart))
+
+    checkoutServiceId <- submitMustFail cashier do
+        exerciseCmd checkoutServiceId Checkout with
+            shoppingCartServiceCid
+    
+    return (testParties, testProducts, shoppingCartServiceId, checkoutServiceId)

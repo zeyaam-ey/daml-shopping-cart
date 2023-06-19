@@ -1,0 +1,70 @@
+module Setup where
+
+import Main
+import Daml.Script
+import DA.Map as Map
+
+
+data TestParties = TestParties with
+    cashier: Party
+    customer: Party
+
+
+data TestProducts = TestProducts with
+    milk: Product
+    eggs: Product
+    bread: Product
+
+
+setupTestParties = script do
+    customer <- allocatePartyWithHint "BobTheCustomer" (PartyIdHint "BobTheCustomer")
+    cashier <- allocatePartyWithHint "AliceTheCashier" (PartyIdHint "AliceTheCashier")
+
+    return TestParties with
+        ..
+
+setupUsers = script do
+    (testParties@TestParties{..}, testProducts@TestProducts{..}, shoppingCartServiceId, checkoutServiceId) <- setupShoppingCartAndMarket
+
+    custId <- validateUserId "BobTheCustomer"   
+    cashierId <- validateUserId "AliceTheCashier"
+
+    createUser (User custId (Some customer)) [CanActAs customer]  
+    createUser (User cashierId (Some cashier)) [CanActAs cashier]
+
+    return ()
+
+setupProducts = script do
+    let 
+        milk = Product with
+            name="Milk"
+            quantity=1
+            price=9.0
+        eggs = Product with
+            name="Eggs"
+            quantity=12
+            price=1.0
+        bread = Product with
+            name="Bread"
+            quantity=2
+            price=4.5
+    return TestProducts with
+        ..
+
+setupShoppingCartAndMarket = script do
+    (testParties@TestParties{..}) <- setupTestParties
+    (testProducts@TestProducts{..}) <- setupProducts
+
+    shoppingCartServiceId <- submit customer do
+        createCmd ShoppingCartService with
+            customer
+            cashier
+            cart = (ShoppingCart with items = Map.empty)
+    
+    checkoutServiceId <- submit cashier do
+            createCmd CheckoutService with
+                cashier
+                customer
+                customerBalance = 0.0
+
+    return (testParties, testProducts, shoppingCartServiceId, checkoutServiceId)

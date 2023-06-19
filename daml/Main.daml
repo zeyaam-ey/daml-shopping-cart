@@ -1,0 +1,127 @@
+module Main where
+
+import DA.Map as Map
+
+
+data Product = Product with
+    name: Text
+    quantity: Int
+    price: Decimal
+        deriving (Show, Eq)
+
+data ShoppingCart = ShoppingCart with
+    items: Map Text Product
+        deriving (Show, Eq)
+
+class Metrics i o  where
+    getCartTotal: i -> o 
+
+instance Metrics ShoppingCart Decimal where
+    getCartTotal cart =
+        let
+            products: [Product] = values cart.items
+            total: Numeric 10 = sum $ (map (\product -> (intToDecimal product.quantity) * product.price ) products)
+        in
+            fromNumeric total
+
+
+template ShoppingCartService
+    with
+        customer: Party
+        cashier: Party
+        cart: ShoppingCart
+    where
+        signatory customer
+        observer cashier
+
+        key (customer, cart): (Party, ShoppingCart)
+        maintainer key._1
+
+        nonconsuming choice GetShoppingCartValue: Decimal
+            controller cashier
+            do 
+                let 
+                    cartTotal: Decimal = getCartTotal cart
+                trace(show customer <> " cart total: " <> show cartTotal)(return cartTotal)
+        
+        choice AddProduct: ContractId ShoppingCartService
+            with
+                product: Product
+            controller customer
+            do
+                assertMsg ("Product price must be non-negative")(product.price>0.0)
+                assertMsg ("Product quantity must be non-negative")(product.quantity>0)
+                let
+                    newCart = case Map.lookup product.name cart.items of
+                        -- If item isn't in cart, add it
+                        None -> (ShoppingCart with
+                            items = Map.insert product.name product cart.items)
+                        -- Else update the quantity
+                        Some prevProduct -> (ShoppingCart with 
+                            items = Map.insert product.name (Product with
+                                name = product.name
+                                quantity = product.quantity+prevProduct.quantity
+                                price = product.price
+                                    ) cart.items)
+                trace(show customer <> " cart: " <> show newCart)(create this with
+                    cart = newCart)
+        
+        choice RemoveProduct: ContractId ShoppingCartService
+            with
+                product: Product
+            controller customer
+            do
+                assertMsg ("Product must have a name")(product.name/="")
+                let
+                    newCart = ShoppingCart with items = Map.filterWithKey (\k v -> v.name /= product.name) cart.items
+                trace(show customer <> " cart: " <> show newCart)(create this with
+                    cart = newCart)
+        
+        choice EmptyCart: ContractId ShoppingCartService
+            with
+                product: Product
+            controller cashier
+            do
+                archive self 
+                trace("Emptied the shopping cart")(create this with
+                    cart = (ShoppingCart with items = Map.empty))
+
+
+template CheckoutService
+    with
+        cashier: Party
+        customer: Party
+        customerBalance: Decimal
+    where
+        signatory cashier
+        observer customer
+
+        ensure customerBalance >= 0.0
+
+        choice Checkout: ContractId CheckoutService
+            with 
+                shoppingCartServiceCid: ContractId ShoppingCartService
+            observer customer
+            controller cashier
+            do 
+                shoppingCartService: ShoppingCartService <- fetch @ShoppingCartService shoppingCartServiceCid
+                let 
+                    shoppingCart = shoppingCartService.cart
+                    cartTotal: Decimal = getCartTotal shoppingCart
+                    newBalance = customerBalance - cartTotal
+                --archive shoppingCartServiceCid
+                --exercise shoppingCartServiceCid EmptyCart
+                assertMsg ("Total balance cannot exceed customer balance")(newBalance >= 0.0)
+                trace ("Remaining customer balance: " <> show newBalance)(create this with 
+                    customerBalance = newBalance)
+        
+        choice AddCustomerBalance: ContractId CheckoutService
+            with
+                additionalBalance: Decimal
+            controller customer
+            do
+                assertMsg ("Additional balance must be non-negative")(additionalBalance > 0.0)
+                let
+                    newBalance = customerBalance + additionalBalance
+                trace ("New customer balance: " <> show newBalance)(create this with 
+                    customerBalance = newBalance) 
